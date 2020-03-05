@@ -66,9 +66,9 @@ int main(int argc, char *argv[])
 	}
 
 	// Populate buffer
-	char buffer[textSize + keySize + 21];	// +21 will be origin number(1), plainfile size(char array size of 10), keyfile size(char array size of 10)
-	memset(buffer, '\0', sizeof(buffer));
-	populateBuffer(keyFP, keySize, plainFP, textSize, buffer);		
+	char buffer[textSize + keySize + 21 + 1];	// +21 will be: origin number(1) +  plainfile size(char array size of 10) + keyfile size(char array size of 10) + 1 null character
+	memset(buffer, '-', sizeof(buffer));
+	populateBuffer(keyFP, keySize, plainFP, textSize, buffer);			
 
 	/************START HERE TO GO INTO SERVER FILE ****************/
 	// Create tSize and kSize character arrays that represent the integer
@@ -76,15 +76,21 @@ int main(int argc, char *argv[])
 	char kSize[10];
 
 	// Clear out t and k size arrays
-	memset(tSize, '\0', sizeof(tSize));
-	memset(kSize, '\0', sizeof(kSize));	
+	memset(tSize, '-', sizeof(tSize));
+	memset(kSize, '-', sizeof(kSize));	
 
 	for(int i = 0; i < 10; i++){
 		tSize[i] = buffer[i+1];
 		kSize[i] = buffer[i+11];
-	}	
+	}
 	
-	//printf("\ntSize int: %d, kSize int: %d\n", atoi(tSize), atoi(kSize));
+//	printf("Printing buffer:\n");
+//	for(int i = 0; i < textSize + keySize + 21 + 1; i++){
+//		printf("%d ", buffer[i]);
+//	}
+//	printf("\n");
+
+//	printf("\ntSize int: %d, kSize int: %d\n", atoi(tSize), atoi(kSize));
 	/***************END HERE TO GO INTO SERVER FILE **************/
 
 	// Set up the server address struct
@@ -105,13 +111,7 @@ int main(int argc, char *argv[])
 	if (connect(socketFD, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) < 0) // Connect socket to address
 		error("CLIENT: ERROR connecting");
 
-	// Get input message from user
-	printf("CLIENT: Enter text to send to the server, and then hit enter: ");
-	memset(buffer, '\0', sizeof(buffer)); 						// Clear out the buffer array
-	fgets(buffer, sizeof(buffer) - 1, stdin); 					// Get input from the user, trunc to buffer - 1 chars, leaving \0
-	buffer[strcspn(buffer, "\n")] = '\0'; 						// Remove the trailing \n that fgets adds
-
-	// Send message to server
+	// Send message to server	
 	charsWritten = send(socketFD, buffer, strlen(buffer), 0); 	// Write to the server
 	if (charsWritten < 0) error("CLIENT: ERROR writing to socket");
 	if (charsWritten < strlen(buffer)) printf("CLIENT: WARNING: Not all data written to socket!\n");
@@ -146,12 +146,16 @@ void populateBuffer(FILE* keyFP, int keySize, FILE* plainFP, int textSize, char*
 	char keySizeC[10];		// Character "string" version of text size (to be copied into buffer)
 
 	// Clear textSizeC and keySizeC
-	memset(textSizeC, '\0', sizeof(textSizeC));
-	memset(keySizeC, '\0', sizeof(keySizeC));
+	memset(textSizeC, '-', sizeof(textSizeC));
+	memset(keySizeC, '-', sizeof(keySizeC));
 
 	// Convert int textSize and keySize into character array
 	sprintf(textSizeC, "%d", textSize);
 	sprintf(keySizeC, "%d", keySize);	
+
+	// sprintf adds null terminating character at the end, replace with '-'
+	textSizeC[strcspn(textSizeC, "\0")] = '-';
+	keySizeC[strcspn(keySizeC, "\0")] = '-';
 
 	// Print origin into buffer
 	buffer[bufferPos] = ORIGIN;	
@@ -184,6 +188,9 @@ void populateBuffer(FILE* keyFP, int keySize, FILE* plainFP, int textSize, char*
 		bufferPos += 1;	
 		c = fgetc(keyFP);
 	}
+
+	// Add null terminator at end of string
+	buffer[bufferPos] = '\0';
 }
 
 /*********************
