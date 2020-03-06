@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -5,21 +6,35 @@
 #include <sys/types.h> 
 #include <sys/socket.h>
 #include <netinet/in.h>
+#include <sys/wait.h>
+#include <signal.h>
+#include <fcntl.h>
+#include <errno.h>
 
 void error(const char *msg) { perror(msg); exit(1); } // Error function used for reporting issues
 
 #define READ_SIZE 21	// Represents size of the READ buffer that we're reading in
+#define MAX_FORKS 5		// Max number of connections allowed
 
 // Function prototypes
 void getHeaderInfo(char*, int, int, int*, int*, char*);
 void getText(int, char*, char*, int, int);
 void encryptText(char*, char*, char*, int);
+void checkForTerm();
+void setupSignals();
+void catchSIGCHLD(int);
+void removePid(int);
+
+// Global vars
+int childPids[MAX_FORKS];
+int numChildren = 0;
 
 int main(int argc, char *argv[])
 {
 	int listenSocketFD, establishedConnectionFD, portNumber, charsRead;
 	socklen_t sizeOfClientInfo;
-	struct sockaddr_in serverAddress, clientAddress;
+	struct sockaddr_in serverAddress, clientAddress;	
+	pid_t returnPid = -5;
 
 	if (argc < 2) { fprintf(stderr,"USAGE: %s port\n", argv[0]); exit(1); } // Check usage & args
 
@@ -39,36 +54,156 @@ int main(int argc, char *argv[])
 		error("ERROR on binding");
 	listen(listenSocketFD, 5); 												// Flip the socket on - it can now receive up to 5 connections
 
-	// Accept a connection, blocking if one is not available until one connects
-	sizeOfClientInfo = sizeof(clientAddress); 								// Get the size of the address for the client that will connect
-	establishedConnectionFD = accept(listenSocketFD, (struct sockaddr *)&clientAddress, &sizeOfClientInfo); // Accept
-	if (establishedConnectionFD < 0) error("ERROR on accept");
+	// Setup signals for SIGCHLD
+	setupSignals();
 
-	// Get plaintext size, key size, and origin from client
+	// Variables for encryption
 	char readBuffer[READ_SIZE];
 	char origin;
 	int keySize, textSize;
 
-	getHeaderInfo(readBuffer, establishedConnectionFD, charsRead, &textSize, &keySize, &origin);
+	// Dynamic arrays
+	char* plaintext;
+	char* keytext;
+	char* enctext;	
 
-	// Get the plaintext and key from the client and display it
-	char plaintext[textSize];
-	char keytext[keySize];
+	int loop = 0; 	// TODO: remove this, infinite loop protection
 
-	getText(establishedConnectionFD, plaintext, keytext, textSize, keySize);
+	// Run server forever
+	while(loop < 30){
+		if(numChildren < MAX_FORKS){
+			// Accept a connection, blocking if one is not available until one connects	
+			sizeOfClientInfo = sizeof(clientAddress); // Get the size of the address for the client that will connect
+			establishedConnectionFD = accept(listenSocketFD, (struct sockaddr *)&clientAddress, &sizeOfClientInfo); // Accept
+			if (establishedConnectionFD < 0) error("ERROR on accept");
 
-	// Encrypt plaintext with keytext
-	char enctext[textSize];
-	encryptText(enctext, plaintext, keytext, textSize);
+			// Spawn child process and increase child count
+			numChildren += 1;
+			
+		//	checkForTerm(childPids);
+			pid_t spawnPid = -5;
+			spawnPid = fork();	
 	
-	// Send a Success message back to the client
-	//charsRead = send(establishedConnectionFD, "I am the server, and I got your message", 39, 0); // Send success back
-	charsRead = send(establishedConnectionFD, enctext, textSize, 0);
-	if (charsRead < 0) error("ERROR writing to socket");
-	close(establishedConnectionFD); 															// Close the existing socket which is connected to the client
-	close(listenSocketFD); 																		// Close the listening socket
+			switch(spawnPid){
+				// Error
+				case -1:
+					perror("Spawning fork went wrong!\n");
+					exit(1);
+					break;
+
+				// Child process
+				case 0:
+					// Get plaintext size, key size, and origin from client				
+					getHeaderInfo(readBuffer, establishedConnectionFD, charsRead, &textSize, &keySize, &origin);
+				
+					// Get the plaintext and key from the client and display it	
+					plaintext = (char*)calloc(textSize, sizeof(char));
+					keytext = (char*)calloc(keySize, sizeof(char));
+					getText(establishedConnectionFD, plaintext, keytext, textSize, keySize);
+				
+					// Encrypt plaintext with keytext
+					enctext = (char*)calloc(textSize, sizeof(char));
+					encryptText(enctext, plaintext, keytext, textSize);
+					
+					// Send a Success message back to the client
+					charsRead = send(establishedConnectionFD, enctext, textSize, 0);
+					if (charsRead < 0){ error("ERROR writing to socket"); }
+			
+					// Close the existing socket which is connected to the client
+					close(establishedConnectionFD);
+	
+					// Free dynamic memory
+					free(plaintext);
+					free(keytext);
+					free(enctext);
+
+					sleep(5);
+
+					// Exit child process
+					exit(0);
+					break;
+				
+				// Parent process
+				default:
+					childPids[numChildren-1] = spawnPid;		
+					break;
+			}
+		}
+		else{
+			// We have more than 5 children, wait for one to finish before continuing
+			printf("TOO MANY CHILDREN: WAITING\n");
+			returnPid = wait(NULL);	
+			removePid(returnPid);
+		}
+
+		loop += 1;	// TODO: remove this after stuff is working
+		if(loop == 30){
+			printf("INFINITE LOOP, YOU FUCKED UP\n");
+		}
+	}
+	// Close the listening socket
+	close(listenSocketFD);
 	
 	return 0; 
+}
+
+/***********************
+ * Remove a single passed in pid from the global childPids array.
+ * This is almost exclusively used after the wait() call
+ ***********************/
+void removePid(int pid){
+	for(int i = 0; i < numChildren; i++){
+		if(childPids[i] == pid){
+			for(int j = i; j < numChildren-1; j++){
+				childPids[j] = childPids[j+1];
+			}
+		}
+	}
+	numChildren -= 1;
+}
+
+/*******************
+ * Setting up signals to catch SIGCHLD
+ *******************/
+void setupSignals(){
+	struct sigaction sigchild_action = {0};
+	sigchild_action.sa_handler = catchSIGCHLD;
+	sigchild_action.sa_flags = SA_RESTART;
+
+	sigaction(SIGCHLD, &sigchild_action, NULL);	// Register signal catcher
+}
+
+/*******************
+ * Any time a child terminates, SIGCHLD will call checkForTerm
+ *******************/
+void catchSIGCHLD(int signo){
+	checkForTerm();
+}
+
+/**********************
+ * Function checks for termination of a child process. Given an
+ * array of ints (childPids) and the number of childPids (count),
+ * we'll loop through and check for any child processes that
+ * have terminated.
+ **********************/
+void checkForTerm(){
+	int exitStatus;
+	int check;
+	int tempCount = numChildren;	
+
+	for(int i = 0; i < tempCount; i++){
+		check = waitpid(childPids[i], &exitStatus, WNOHANG);
+
+		// If check > 0, process has finished, get exitStatus and print
+		if(check > 0){
+			// Remove pid from the array, i.e., move down values one slot
+			for(int j = i; j < tempCount-1; j++){
+				childPids[j] = childPids[j+1];
+			}
+
+			numChildren -= 1;
+		}
+	}
 }
 
 void encryptText(char* enctext, char* plaintext, char* keytext, int size){
@@ -121,14 +256,7 @@ void getHeaderInfo(char* readBuffer, int establishedConnectionFD, int charsRead,
 	// Clear out buffers
 	memset(readBuffer, '\0', READ_SIZE);
 
-	charsRead = recv(establishedConnectionFD, readBuffer, READ_SIZE, 0); 	// Read the client's message from the socket
-	
-//	printf("sizeof readbuffer: %d\n", sizeof(readBuffer)/sizeof(readBuffer[0]));
-//	printf("printing readBuffer:\n");
-//	for(int i = 0; i < READ_SIZE; i++){
-//		printf("%d ", readBuffer[i]);
-//	}
-//	printf("\n");
+	charsRead = recv(establishedConnectionFD, readBuffer, READ_SIZE, 0); 	// Read the client's message from the socket	
 	
 	// Create tSize and kSize character arrays that represent the integer and origin
 	char tSize[10];
@@ -146,38 +274,4 @@ void getHeaderInfo(char* readBuffer, int establishedConnectionFD, int charsRead,
 	*origin = readBuffer[0];
 	*textSize = atoi(tSize);
 	*keySize = atoi(kSize);
-
-//	while(strstr(fullBuffer, "@@") == NULL){
-//		memset(readBuffer, '\0', sizeof(readBuffer));
-//		charsRead = recv(establishedConnectionFD, readBuffer, sizeof(readBuffer) - 1, 0); 	// Read the client's message from the socket
-//
-//		printf("printing readBuffer:\n");
-//		for(int i = 0; i < READ_SIZE; i++){
-//			printf("%d ", readBuffer[i]);
-//		}
-//		printf("\n");
-//
-//		// Add chunk of readBuffer to fullBuffer
-//		strcat(fullBuffer, readBuffer);
-//
-//		// Check for errors
-//		if(charsRead < 0){ error("ERROR reading from socket"); }
-//		if(charsRead == 0){
-//			printf("Return chars == 0, shutdown happened.\n");
-//			break;
-//		}
-//
-//		// Find where to replace '\0'
-//		for(int i = 0; i < ARR_SIZE; i++){
-//			printf("%d ", fullBuffer[i]);
-//		}
-//		printf("\n");
-//		int index = strstr(fullBuffer, "@@") - fullBuffer;
-//		
-//		printf("index: %d\n", index);
-//		fullBuffer[index] = '\0';
-//
-//
-//	}
-
 }

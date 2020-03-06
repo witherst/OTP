@@ -68,30 +68,7 @@ int main(int argc, char *argv[])
 	// Populate buffer
 	char buffer[textSize + keySize + 21 + 1];	// +21 will be: origin number(1) +  plainfile size(char array size of 10) + keyfile size(char array size of 10) + 1 null character
 	memset(buffer, '-', sizeof(buffer));
-	populateBuffer(keyFP, keySize, plainFP, textSize, buffer);			
-
-	/************START HERE TO GO INTO SERVER FILE ****************/
-	// Create tSize and kSize character arrays that represent the integer
-	char tSize[10];
-	char kSize[10];
-
-	// Clear out t and k size arrays
-	memset(tSize, '-', sizeof(tSize));
-	memset(kSize, '-', sizeof(kSize));	
-
-	for(int i = 0; i < 10; i++){
-		tSize[i] = buffer[i+1];
-		kSize[i] = buffer[i+11];
-	}
-	
-//	printf("Printing buffer:\n");
-//	for(int i = 0; i < textSize + keySize + 21 + 1; i++){
-//		printf("%d ", buffer[i]);
-//	}
-//	printf("\n");
-
-//	printf("\ntSize int: %d, kSize int: %d\n", atoi(tSize), atoi(kSize));
-	/***************END HERE TO GO INTO SERVER FILE **************/
+	populateBuffer(keyFP, keySize, plainFP, textSize, buffer);
 
 	// Set up the server address struct
 	memset((char*)&serverAddress, '\0', sizeof(serverAddress)); // Clear out the address struct
@@ -111,8 +88,8 @@ int main(int argc, char *argv[])
 	if (connect(socketFD, (struct sockaddr*)&serverAddress, sizeof(serverAddress)) < 0) // Connect socket to address
 		error("CLIENT: ERROR connecting");
 
-	// Send message to server	
-	charsWritten = send(socketFD, buffer, strlen(buffer), 0); 	// Write to the server
+	// Send message to server
+	charsWritten = send(socketFD, buffer, strlen(buffer), 0);  	// Write to the server 
 	if (charsWritten < 0) error("CLIENT: ERROR writing to socket");
 	if (charsWritten < strlen(buffer)) printf("CLIENT: WARNING: Not all data written to socket!\n");
 
