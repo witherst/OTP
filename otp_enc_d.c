@@ -67,78 +67,73 @@ int main(int argc, char *argv[])
 	char* keytext;
 	char* enctext;	
 
-	int loop = 0; 	// TODO: remove this, infinite loop protection
-
 	// Run server forever
-	while(loop < 30){
+	while(1){
 		if(numChildren < MAX_FORKS){
 			// Accept a connection, blocking if one is not available until one connects	
 			sizeOfClientInfo = sizeof(clientAddress); // Get the size of the address for the client that will connect
 			establishedConnectionFD = accept(listenSocketFD, (struct sockaddr *)&clientAddress, &sizeOfClientInfo); // Accept
-			if (establishedConnectionFD < 0) error("ERROR on accept");
+			if (establishedConnectionFD < 0) error("ERROR on accept");		
 
-			// Spawn child process and increase child count
-			numChildren += 1;
-			
-		//	checkForTerm(childPids);
-			pid_t spawnPid = -5;
-			spawnPid = fork();	
+				// Spawn child process and increase child count
+				numChildren += 1;
+				
+				pid_t spawnPid = -5;
+				spawnPid = fork();	
+		
+				switch(spawnPid){
+					// Error
+					case -1:
+						perror("Spawning fork went wrong!\n");
+						exit(1);
+						break;
 	
-			switch(spawnPid){
-				// Error
-				case -1:
-					perror("Spawning fork went wrong!\n");
-					exit(1);
-					break;
+					// Child process
+					case 0:	
+						// Get plaintext size, key size, and origin from client				
+						getHeaderInfo(readBuffer, establishedConnectionFD, charsRead, &textSize, &keySize, &origin);
 
-				// Child process
-				case 0:
-					// Get plaintext size, key size, and origin from client				
-					getHeaderInfo(readBuffer, establishedConnectionFD, charsRead, &textSize, &keySize, &origin);
-				
-					// Get the plaintext and key from the client and display it	
-					plaintext = (char*)calloc(textSize, sizeof(char));
-					keytext = (char*)calloc(keySize, sizeof(char));
-					getText(establishedConnectionFD, plaintext, keytext, textSize, keySize);
-				
-					// Encrypt plaintext with keytext
-					enctext = (char*)calloc(textSize, sizeof(char));
-					encryptText(enctext, plaintext, keytext, textSize);
+						// Check if origin is from otp_enc
+						if(origin == '!'){
+							plaintext = (char*)calloc(textSize, sizeof(char));
+							keytext = (char*)calloc(keySize, sizeof(char));
+							getText(establishedConnectionFD, plaintext, keytext, textSize, keySize);
+						
+							// Encrypt plaintext with keytext
+							enctext = (char*)calloc(textSize, sizeof(char));
+							encryptText(enctext, plaintext, keytext, textSize);
+							
+							// Send a Success message back to the client
+							charsRead = send(establishedConnectionFD, enctext, textSize, 0);
+							if (charsRead < 0){ error("ERROR writing to socket"); }
 					
-					// Send a Success message back to the client
-					charsRead = send(establishedConnectionFD, enctext, textSize, 0);
-					if (charsRead < 0){ error("ERROR writing to socket"); }
-			
-					// Close the existing socket which is connected to the client
-					close(establishedConnectionFD);
-	
-					// Free dynamic memory
-					free(plaintext);
-					free(keytext);
-					free(enctext);
-
-					sleep(5);
-
-					// Exit child process
-					exit(0);
-					break;
+							// Close the existing socket which is connected to the client
+							close(establishedConnectionFD);
 				
-				// Parent process
-				default:
-					childPids[numChildren-1] = spawnPid;		
-					break;
-			}
+							// Free dynamic memory
+							free(plaintext);
+							free(keytext);
+							free(enctext);
+						}
+						else{
+							fprintf(stderr,"SERVER ERROR: Connection not from otp_enc.\n");
+							charsRead = send(establishedConnectionFD, "ERROR: Connection not from otp_enc.", 35, 0);
+							close(establishedConnectionFD);
+						}
+						// Exit child process
+						exit(0);
+						break;
+					
+					// Parent process
+					default:
+						childPids[numChildren-1] = spawnPid;		
+						break;
+				}	
 		}
 		else{
 			// We have more than 5 children, wait for one to finish before continuing
-			printf("TOO MANY CHILDREN: WAITING\n");
 			returnPid = wait(NULL);	
 			removePid(returnPid);
-		}
-
-		loop += 1;	// TODO: remove this after stuff is working
-		if(loop == 30){
-			printf("INFINITE LOOP, YOU FUCKED UP\n");
 		}
 	}
 	// Close the listening socket
@@ -209,11 +204,15 @@ void checkForTerm(){
 void encryptText(char* enctext, char* plaintext, char* keytext, int size){
 	int letter1, letter2;
 
-	for(int i = 0; i < size; i++){
-		letter1 = plaintext[i];
-		letter2 = keytext[i];
-		enctext[i] = ((letter1 + letter2) % 27) + 65;	// +65 to bring the alphabet "up" to 'A' in the ascii table
-		//printf("%c + %c = %c\n", plaintext[i], keytext[i], enctext[i]);
+	for(int i = 0; i < size; i++){	
+		if(plaintext[i] == ' '){
+			enctext[i] = ' ';
+		}
+		else{
+			letter1 = plaintext[i];
+			letter2 = keytext[i];
+			enctext[i] = ((letter1 + letter2) % 26) + 65;	// +65 to bring the alphabet "up" to 'A' in the ascii table	
+		}
 	}
 }
 

@@ -97,7 +97,12 @@ int main(int argc, char *argv[])
 	memset(buffer, '\0', sizeof(buffer)); 						// Clear out the buffer again for reuse
 	charsRead = recv(socketFD, buffer, sizeof(buffer) - 1, 0); 	// Read data from the socket, leaving \0 at end
 	if (charsRead < 0) error("CLIENT: ERROR reading from socket");
-	printf("CLIENT: I received this from the server: \"%s\"\n", buffer);
+//	printf("%s\n", buffer);
+//	printf("CLIENT FROM SERVER: strlen(buffer): %d\n", strlen(buffer));
+	for(int i = 0; i < strlen(buffer); i++){
+		printf("%c", buffer[i]);
+	}
+//	printf("\n");
 
 	close(socketFD); // Close the socket
 	return 0;
@@ -216,21 +221,3 @@ int checkPlaintext(FILE* fp, int* size){
 	
 	return 0;
 }
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
